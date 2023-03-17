@@ -1,6 +1,5 @@
 use std::time::SystemTime;
 
-use base64::engine::general_purpose;
 use base64::Engine as _;
 use dotenv::dotenv;
 use hmac::{Hmac, Mac};
@@ -27,11 +26,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let builder = client.request(
         Method::GET,
-        "https://cad.onshape.com/api/v5/versions",
+        "https://cad.onshape.com/api/documents/85622754e9b97bcf5c74da64",
         mime::APPLICATION_JSON,
     );
+
     let response = builder.send().expect("Versions call must succeed");
-    println!("{:#?}", response);
+    println!("response: {:#?}", response);
+    println!("body: {}", response.text().expect("Success"));
 
     Ok(())
 }
@@ -63,9 +64,9 @@ impl OnShapeClient {
         });
 
         let signature_plaintext =
-            format!("{method}\n{nonce}\n{date}\n{content_type}\n{path}\n{query}")
+            // NOTE: While not documented, the trailing newline is a requirement
+            format!("{method}\n{nonce}\n{date}\n{content_type}\n{path}\n{query}\n")
                 .to_lowercase();
-        println!("signature_plaintext: {}", signature_plaintext);
 
         let mac = {
             let mut m = HmacSha256::new_from_slice(self.secret_key.as_bytes())
@@ -75,25 +76,32 @@ impl OnShapeClient {
         };
 
         let authorization_val = format!(
-            "{}:HmacSHA256:{}",
-            self.access_key,
-            general_purpose::STANDARD_NO_PAD.encode(mac.finalize().into_bytes())
+            "On {access_key}:HmacSHA256:{signature}",
+            access_key = self.access_key,
+            // NOTE: The OnShape API requires that the signature be encoded as base64 with
+            // padding characters, and as such, we use the STANDARD engine (not the
+            // STANDARD_NO_PAD).
+            signature =
+                base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes())
         );
-        println!("authorization_val: {}", authorization_val);
 
         self.http_client
             .request(method, url)
-            // .header(header::AUTHORIZATION, authorization_val)
-            .header(header::ACCEPT, content_type.to_string())
+            .header(header::AUTHORIZATION, authorization_val)
+            .header(
+                header::ACCEPT,
+                "application/vnd.onshape.v2+json;charset=UTF-8;qs=0.2",
+            )
+            .header(header::CONTENT_TYPE, content_type.to_string())
             .header(header::DATE, date)
-        // .header("On-Nonce", nonce)
+            .header("On-Nonce", nonce)
     }
 }
 
 fn create_nonce() -> String {
     thread_rng()
         .sample_iter(&Alphanumeric)
-        .take(14)
+        .take(25)
         .map(char::from)
         .collect()
 }
